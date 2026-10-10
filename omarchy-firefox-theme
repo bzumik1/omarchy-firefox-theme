@@ -1,0 +1,385 @@
+#!/bin/bash
+
+# Generate a square, Omarchy-styled Firefox UI (userChrome.css + userContent.css + user.js)
+# from the current Omarchy theme colors and monospace font, for every Firefox profile.
+# Runs from the theme-set and font-set hooks. Firefox must be restarted to pick up changes.
+
+COLORS=$HOME/.local/state/omarchy/current/theme/colors.toml
+PROFILE_ROOTS=("$HOME/.config/mozilla/firefox" "$HOME/.mozilla/firefox")
+
+[[ -f $COLORS ]] || { echo "No Omarchy colors at $COLORS" >&2; exit 1; }
+
+color() {
+  sed -nE "s/^$1[[:space:]]*=[[:space:]]*\"(#[0-9a-fA-F]{6})\".*/\1/p" "$COLORS" | head -1
+}
+
+mode=$(sed -nE 's/^mode[[:space:]]*=[[:space:]]*"([a-z]+)".*/\1/p' "$COLORS")
+bg=$(color background)
+bg_dark=$(color dark_background)
+bg_darker=$(color darker_background)
+bg_lighter=$(color lighter_background)
+fg=$(color foreground)
+fg_bright=$(color bright_foreground)
+accent=$(color accent)
+selection=$(color selection)
+muted=$(color muted)
+red=$(color red)
+font=$(omarchy-font-current 2>/dev/null || echo "monospace")
+
+[[ $mode == light ]] && scheme=1 || scheme=0
+
+profiles=()
+for root in "${PROFILE_ROOTS[@]}"; do
+  for dir in "$root"/*/; do
+    [[ -f $dir/prefs.js || -f $dir/times.json ]] && profiles+=("${dir%/}")
+  done
+done
+
+if (( ${#profiles[@]} == 0 )); then
+  echo "No Firefox profile found. Start Firefox once, close it, and run this again." >&2
+  exit 1
+fi
+
+# Omarchy palette plus Firefox's design-system tokens, shared by the browser chrome and
+# the built-in about: pages so menus, panels, settings and buttons all use the theme.
+read -r -d '' tokens <<EOF
+  --om-bg: $bg;
+  --om-bg-dark: $bg_dark;
+  --om-bg-darker: $bg_darker;
+  --om-bg-lighter: $bg_lighter;
+  --om-fg: $fg;
+  --om-fg-bright: $fg_bright;
+  --om-fg-dim: color-mix(in srgb, $fg 60%, $bg);
+  --om-accent: $accent;
+  --om-selection: $selection;
+  --om-muted: $muted;
+  --om-red: $red;
+  --om-font: "$font", monospace;
+
+  /* Square everything */
+  --border-radius-xsmall: 0px !important;
+  --border-radius-small: 0px !important;
+  --border-radius-medium: 0px !important;
+  --border-radius-large: 0px !important;
+  --border-radius-xlarge: 0px !important;
+  --border-radius-circle: 0px !important;
+  --button-border-radius: 0px !important;
+  --card-border-radius: 0px !important;
+  --input-text-border-radius: 0px !important;
+  --input-search-border-radius: 0px !important;
+
+  /* Surfaces and text */
+  --background-color-canvas: var(--om-bg) !important;
+  --background-color-box: var(--om-bg-dark) !important;
+  --background-color-dimmed: var(--om-bg-lighter) !important;
+  --background-color-dimmed-further: var(--om-selection) !important;
+  --background-color-list-item-hover: var(--om-bg-lighter) !important;
+  --text-color: var(--om-fg) !important;
+  --text-color-deemphasized: var(--om-fg-dim) !important;
+  --text-color-list-item-hover: var(--om-fg-bright) !important;
+  --border-color: var(--om-muted) !important;
+  --border-color-deemphasized: var(--om-muted) !important;
+  --border-color-interactive: var(--om-muted) !important;
+  --border-color-selected: var(--om-accent) !important;
+  --card-background-color: var(--om-bg-dark) !important;
+  --card-border-color: var(--om-muted) !important;
+  --card-box-shadow: none !important;
+  --card-box-shadow-hover: none !important;
+  --table-background-color: var(--om-bg-dark) !important;
+  --table-border-color: var(--om-muted) !important;
+  --table-header-background-color: var(--om-bg-lighter) !important;
+  --table-row-background-color: var(--om-bg-dark) !important;
+  --table-row-background-color-alternate: var(--om-bg) !important;
+  --icon-color: var(--om-fg) !important;
+
+  /* Accent, links, focus */
+  --color-accent-primary: var(--om-accent) !important;
+  --color-accent-primary-hover: color-mix(in srgb, var(--om-accent) 85%, var(--om-fg-bright)) !important;
+  --color-accent-primary-active: var(--om-accent) !important;
+  --color-accent-primary-selected: var(--om-accent) !important;
+  --text-color-accent-primary-selected: var(--om-bg) !important;
+  --link-color: var(--om-accent) !important;
+  --link-color-hover: var(--om-accent) !important;
+  --link-color-active: var(--om-accent) !important;
+  --link-color-visited: var(--om-accent) !important;
+  --focus-outline-color: var(--om-accent) !important;
+
+  /* Buttons: flat fills, primary in accent */
+  --button-background-color: var(--om-bg-lighter) !important;
+  --button-background-color-hover: var(--om-selection) !important;
+  --button-background-color-active: var(--om-selection) !important;
+  --button-background-color-muted: var(--om-bg-lighter) !important;
+  --button-background-color-muted-hover: var(--om-selection) !important;
+  --button-background-color-muted-active: var(--om-selection) !important;
+  --button-text-color-muted: var(--om-fg) !important;
+  --button-background-color-ghost: transparent !important;
+  --button-background-color-ghost-hover: var(--om-bg-lighter) !important;
+  --button-background-color-ghost-active: var(--om-selection) !important;
+  --button-text-color: var(--om-fg) !important;
+  --button-text-color-hover: var(--om-fg-bright) !important;
+  --button-border-color: transparent !important;
+  --button-background-color-primary: var(--om-accent) !important;
+  --button-background-color-primary-hover: color-mix(in srgb, var(--om-accent) 85%, var(--om-fg-bright)) !important;
+  --button-background-color-primary-active: var(--om-accent) !important;
+  --button-text-color-primary: var(--om-bg) !important;
+  --button-text-color-primary-hover: var(--om-bg) !important;
+  --button-text-color-primary-active: var(--om-bg) !important;
+  --button-border-color-primary: transparent !important;
+
+  /* Inputs */
+  --input-text-background-color: var(--om-bg-darker) !important;
+  --input-text-border-color: var(--om-muted) !important;
+  --input-text-color: var(--om-fg) !important;
+  --input-border-color: var(--om-muted) !important;
+
+  /* Popups and panels */
+  --panel-background-color: var(--om-bg) !important;
+  --panel-text-color: var(--om-fg) !important;
+  --panel-border-color: var(--om-accent) !important;
+  --panel-separator-color: var(--om-muted) !important;
+  --panel-box-shadow: none !important;
+  --popup-background-color: var(--om-bg) !important;
+  --popup-border-color: var(--om-accent) !important;
+  --popup-box-shadow: none !important;
+EOF
+
+for profile in "${profiles[@]}"; do
+  mkdir -p "$profile/chrome"
+
+  cat >"$profile/user.js" <<EOF
+// Managed by omarchy-firefox-theme — regenerated on every theme change.
+user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true);
+user_pref("browser.compactmode.show", true);
+user_pref("browser.uidensity", 1);
+user_pref("browser.tabs.inTitlebar", 0);
+user_pref("browser.theme.toolbar-theme", $scheme);
+user_pref("browser.theme.content-theme", $scheme);
+user_pref("layout.css.prefers-color-scheme.content-override", $scheme);
+user_pref("browser.newtabpage.activity-stream.showSponsored", false);
+user_pref("browser.newtabpage.activity-stream.showSponsoredTopSites", false);
+user_pref("browser.newtabpage.activity-stream.feeds.section.topstories", false);
+user_pref("browser.tabs.firefox-view", false);
+user_pref("browser.newtabpage.activity-stream.showWeather", false);
+user_pref("browser.newtabpage.activity-stream.system.showWeather", false);
+user_pref("ui.prefersReducedMotion", 1);
+EOF
+
+  cat >"$profile/chrome/userChrome.css" <<EOF
+/* Managed by omarchy-firefox-theme — regenerated on every theme change. */
+
+/* :host too, because widgets with a shadow root re-declare the design tokens there */
+:root, :host {
+$tokens
+
+  /* Toolbars and tabs */
+  --toolbox-background-color: var(--om-bg-dark) !important;
+  --toolbox-background-color-inactive: var(--om-bg-dark) !important;
+  --toolbox-text-color: var(--om-fg) !important;
+  --toolbox-text-color-inactive: var(--om-fg) !important;
+  --toolbar-background-color: var(--om-bg) !important;
+  --toolbar-text-color: var(--om-fg) !important;
+  --toolbarbutton-border-radius: 0px !important;
+  --toolbarbutton-padding-outer: 2px !important;
+  --toolbarbutton-background-color-hover: var(--om-bg-lighter) !important;
+  --toolbarbutton-background-color-active: var(--om-selection) !important;
+  --toolbarbutton-icon-fill: var(--om-fg) !important;
+  --toolbarbutton-icon-fill-attention: var(--om-accent) !important;
+  --toolbarbutton-badge-background-color: var(--om-accent) !important;
+  --toolbarseparator-color: var(--om-muted) !important;
+  --tabs-navbar-separator-color: transparent !important;
+  --tab-border-radius: 0px !important;
+  --tab-text-color: var(--om-fg-dim) !important;
+  --tab-text-color-hover: var(--om-fg) !important;
+  --tab-text-color-selected: var(--om-fg-bright) !important;
+  --tab-background-color-hover: var(--om-bg-lighter) !important;
+  --tab-background-color-selected: var(--om-bg) !important;
+  --tab-box-shadow-selected: none !important;
+  --tab-border-color-selected: transparent !important;
+  --chrome-content-separator-color: var(--om-muted) !important;
+  --sidebar-background-color: var(--om-bg-dark) !important;
+  --sidebar-text-color: var(--om-fg) !important;
+  --sidebar-border-color: var(--om-muted) !important;
+
+  /* URL bar and its results */
+  --toolbar-field-background-color: var(--om-bg-darker) !important;
+  --toolbar-field-background-color-focus: var(--om-bg-darker) !important;
+  --toolbar-field-text-color: var(--om-fg) !important;
+  --toolbar-field-text-color-focus: var(--om-fg-bright) !important;
+  --toolbar-field-border-color: var(--om-muted) !important;
+  --toolbar-field-border-color-focus: var(--om-accent) !important;
+  --urlbar-border-radius: 0px !important;
+  --urlbar-box-background-color: var(--om-bg-lighter) !important;
+  --urlbar-box-background-color-hover: var(--om-selection) !important;
+  --urlbar-box-background-color-active: var(--om-selection) !important;
+  --urlbar-box-background-color-focus: var(--om-bg-lighter) !important;
+  --urlbar-box-text-color: var(--om-fg) !important;
+  --urlbarview-border-radius: 0px !important;
+  --urlbarview-background-color-hover: var(--om-bg-lighter) !important;
+  --urlbarview-background-color-selected: var(--om-selection) !important;
+  --urlbarview-text-color-selected: var(--om-fg-bright) !important;
+  --urlbarview-text-color-secondary: var(--om-fg-dim) !important;
+  --urlbarview-text-color-action: var(--om-fg-dim) !important;
+  --urlbarview-separator-color: var(--om-muted) !important;
+  --urlbarview-action-button-background-color: var(--om-bg-lighter) !important;
+  --urlbarview-action-button-background-color-hover: var(--om-selection) !important;
+
+  /* Menu items inside panels */
+  --panel-menuitem-border-radius: 0px !important;
+  --menuitem-border-radius: 0px !important;
+  --arrowpanel-border-radius: 0px !important;
+
+  /* Tracking-protection card in the site info panel (default is Firefox violet) */
+  --trustpanel-highlight-bg: var(--om-bg-dark) !important;
+  --trustpanel-graphic-bg: var(--om-bg-dark) !important;
+}
+
+/* Kill rounding on anything that hard-codes it */
+*, *::before, *::after { border-radius: 0 !important; }
+
+/* Monospace UI font like the rest of Omarchy */
+#navigator-toolbox, #urlbar, .urlbarView, menupopup, panel, panelview, tooltip,
+#sidebar-box, #sidebar-main, .tab-label, findbar, #statuspanel-label {
+  font-family: var(--om-font) !important;
+}
+
+#navigator-toolbox {
+  background-color: var(--om-bg-dark) !important;
+  border-bottom: 1px solid var(--om-muted) !important;
+}
+
+#nav-bar, #PersonalToolbar, findbar {
+  background-color: var(--om-bg) !important;
+  color: var(--om-fg) !important;
+  box-shadow: none !important;
+}
+
+/* Flat, edge-to-edge tabs: the active one merges into the toolbar, like the bar's workspaces */
+.tabbrowser-tab { padding-inline: 0 !important; }
+.tabbrowser-tab:not([pinned]) { max-width: 220px !important; }
+.tab-background {
+  margin-block: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+  border: none !important;
+}
+.tab-background:is([selected], [multiselected]) {
+  background: var(--om-bg) !important;
+}
+.tabbrowser-tab:not([selected]) .tab-label { color: var(--om-fg-dim) !important; }
+.tabbrowser-tab:hover:not([selected]) .tab-label { color: var(--om-fg) !important; }
+.tabbrowser-tab:not([selected]) .tab-close-button { color: var(--om-fg-dim) !important; }
+.tab-context-line { display: none !important; }
+
+/* URL bar: flat box, accent border on focus; the results view hangs below it in the same frame */
+.urlbar-background {
+  background-color: var(--om-bg-darker) !important;
+  border: 1px solid var(--om-muted) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+#urlbar:is([focused], [open]) .urlbar-background { border-color: var(--om-accent) !important; }
+.urlbarView-background {
+  background-color: var(--om-bg-darker) !important;
+  border: 1px solid var(--om-accent) !important;
+  box-shadow: none !important;
+}
+.urlbarView { color: var(--om-fg) !important; }
+.urlbarView-url, .urlbarView-row[type=remotetab] .urlbarView-action { color: var(--om-accent) !important; }
+.urlbarView-row:is([selected], [aria-selected=true]) .urlbarView-url { color: var(--om-fg-bright) !important; }
+
+/* Popups and menus */
+menupopup, panel {
+  --panel-border-radius: 0px !important;
+  --panel-shadow-margin: 0px !important;
+  --panel-background-color: var(--om-bg) !important;
+  --panel-text-color: var(--om-fg) !important;
+  --panel-border-color: var(--om-accent) !important;
+  --panel-box-shadow: none !important;
+}
+menupopup menuitem:hover, menupopup menu:hover,
+menupopup menuitem[_moz-menuactive], menupopup menu[_moz-menuactive] {
+  background-color: var(--om-selection) !important;
+  color: var(--om-fg-bright) !important;
+}
+menupopup menuitem[disabled], menupopup menu[disabled] { color: var(--om-fg-dim) !important; }
+toolbarseparator.proton-zap::before { border-image: none !important; }
+tooltip {
+  appearance: none !important;
+  background-color: var(--om-bg) !important;
+  color: var(--om-fg) !important;
+  border: 1px solid var(--om-accent) !important;
+}
+
+/* Sync sign-in promo at the top of the main menu (default is Firefox violet) */
+#appMenu-fxa-sign-in-promo {
+  background-color: var(--om-bg-dark) !important;
+  color: var(--om-fg) !important;
+}
+
+/* Find bar */
+.findbar-textbox {
+  background-color: var(--om-bg-darker) !important;
+  color: var(--om-fg) !important;
+  border: 1px solid var(--om-muted) !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+.findbar-textbox:focus { border-color: var(--om-accent) !important; }
+.findbar-textbox[status=notfound] { border-color: var(--om-red) !important; }
+
+/* Less clutter: no window buttons (Hyprland handles windows), no Firefox View */
+.titlebar-buttonbox-container, .titlebar-spacer,
+#firefox-view-button { display: none !important; }
+
+/* Content area separator */
+#tabbrowser-tabbox { outline: none !important; box-shadow: none !important; }
+EOF
+
+  cat >"$profile/chrome/userContent.css" <<EOF
+/* Managed by omarchy-firefox-theme — regenerated on every theme change. */
+
+/* Built-in pages (settings, add-ons, new tab, …) get the same palette, squareness and font */
+@-moz-document url-prefix("about:") {
+  :root, :host {
+$tokens
+
+    --newtab-background-color: $bg !important;
+    --newtab-background-color-secondary: $bg_dark !important;
+    --newtab-text-primary-color: $fg !important;
+    --newtab-primary-action-background: $accent !important;
+    --in-content-page-background: $bg !important;
+    --in-content-page-color: $fg !important;
+    --in-content-box-background: $bg_dark !important;
+    --in-content-box-border-color: $muted !important;
+    --in-content-primary-button-background: $accent !important;
+    --in-content-primary-button-text-color: $bg !important;
+    color-scheme: $([[ $mode == light ]] && echo light || echo dark) !important;
+  }
+  :root, body {
+    background-color: $bg !important;
+    color: $fg !important;
+  }
+  *, *::before, *::after {
+    border-radius: 0 !important;
+    font-family: "$font", monospace !important;
+  }
+}
+
+@-moz-document url("about:home"), url("about:newtab"), url("about:privatebrowsing") {
+  .logo-and-wordmark, .logo-and-wordmark-wrapper, .wordmark { display: none !important; }
+  .lists { --lists-button-background: $accent !important; }
+  .search-handoff-button, .search-inner-wrapper input {
+    background-color: $bg_darker !important;
+    border: 1px solid $muted !important;
+    box-shadow: none !important;
+    color: $fg !important;
+  }
+}
+EOF
+
+  echo "Styled Firefox profile: $profile"
+done
+
+if pgrep -x firefox >/dev/null; then
+  notify-send -u low "Firefox" "Restart Firefox to apply the new Omarchy look" 2>/dev/null || true
+fi
