@@ -6,6 +6,14 @@ Makes Firefox look like the rest of [Omarchy](https://omarchy.org): square corne
 |---|---|
 | ![Chromium](screenshots/chromium-default.png) | ![Firefox](screenshots/firefox-omarchy.png) |
 
+Firefox next to a terminal on the Omarchy desktop:
+
+![Firefox on the Omarchy desktop](screenshots/desktop-firefox.png)
+
+Stock Chromium in the same spot:
+
+![Chromium on the Omarchy desktop](screenshots/desktop-chromium.png)
+
 ## What it does
 
 - Reads `~/.local/state/omarchy/current/theme/colors.toml` and `omarchy font current`
